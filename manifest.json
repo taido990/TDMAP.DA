@@ -1,7 +1,7 @@
 {
   "name": "DA-TDMAP.PRO.VN",
   "short_name": "TDMAP",
-  "start_url": "./index_KH113.html",
+  "start_url": "./index.html",
   "display": "standalone",
   "background_color": "#ffffff",
   "theme_color": "#00c6a7",
