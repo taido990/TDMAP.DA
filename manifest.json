@@ -1,20 +1,24 @@
 {
+  "id": "./",
   "name": "DA-TDMAP.PRO.VN",
   "short_name": "TDMAP",
-  "start_url": "./index_DA.html",
+  "start_url": "./",
+  "scope": "./",
   "display": "standalone",
   "background_color": "#ffffff",
   "theme_color": "#00c6a7",
   "icons": [
     {
-      "src": "app-icon.ico",
+      "src": "icon-192.png",
       "sizes": "192x192",
-      "type": "image/x-icon"
+      "type": "image/png",
+      "purpose": "any"
     },
     {
-      "src": "app-icon.ico",
+      "src": "icon-512.png",
       "sizes": "512x512",
-      "type": "image/x-icon"
+      "type": "image/png",
+      "purpose": "any"
     }
   ]
 }
