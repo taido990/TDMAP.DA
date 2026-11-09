@@ -9,6 +9,67 @@
   <title>TDMAP.PRO.VN-DA</title>
   <!-- 121026v1 -->
 
+  <!-- ══ PHIÊN BẢN + TỰ CẬP NHẬT ══
+       Mỗi lần mở trang (và khi quay lại trang sau ≥ 1 phút ở nền), đọc version.json mới nhất trên máy chủ;
+       khác APP_VERSION của trang đang chạy -> tự tải lại bản mới (thêm ?_v=<phiên bản> để vượt bộ đệm trình duyệt /
+       GitHub Pages). Đang mở trình Scan hoặc đang lưu hồ sơ thì KHÔNG tự tải lại mà hiện thanh "Cập nhật".
+       Đổi phiên bản trước khi đưa lên: chạy  python cap_nhat_phien_ban.py "ghi chú"  (sửa cả APP_VERSION lẫn version.json). -->
+  <script>
+    window.APP_VERSION = '2026.11.09.1';
+    (function () {
+      var TRY_KEY = 'tdmap_update_try', hiddenAt = 0;
+      // Bản mới đã chạy -> bỏ tham số _v khỏi thanh địa chỉ cho gọn.
+      try {
+        var u0 = new URL(location.href);
+        if (u0.searchParams.get('_v') === window.APP_VERSION) { u0.searchParams.delete('_v'); history.replaceState(history.state, '', u0.href); }
+      } catch (e) { }
+      function busy() { // đang mở trình scan / đang lưu hồ sơ
+        try { return typeof ScanHS !== 'undefined' && ScanHS.busy && ScanHS.busy(); } catch (e) { return false; }
+      }
+      function reloadTo(v, force) {
+        // Chống tải lại vòng tròn: máy chủ còn trả trang cũ (bộ đệm chưa hết hạn) thì chỉ thử 1 lần mỗi phiên bản.
+        try { if (!force && sessionStorage.getItem(TRY_KEY) === v) return false; sessionStorage.setItem(TRY_KEY, v); } catch (e) { }
+        var u = new URL(location.href); u.searchParams.set('_v', v);
+        location.replace(u.href);
+        return true;
+      }
+      function banner(d) {
+        if (document.getElementById('appUpdateBar') || !document.body) return;
+        var b = document.createElement('div');
+        b.id = 'appUpdateBar';
+        b.style.cssText = 'position:fixed;left:50%;transform:translateX(-50%);bottom:calc(14px + env(safe-area-inset-bottom));z-index:100000;' +
+          'background:#0d3d75;color:#fff;border-radius:10px;padding:9px 12px;font:600 13px system-ui,sans-serif;display:flex;gap:10px;' +
+          'align-items:center;box-shadow:0 4px 16px rgba(0,0,0,.35);max-width:calc(100vw - 24px)';
+        var t = document.createElement('span'); t.textContent = '🔄 Đã có phiên bản mới ' + d.version;
+        var ok = document.createElement('button'); ok.textContent = 'Cập nhật';
+        ok.style.cssText = 'background:#00c6a7;color:#fff;border:0;border-radius:7px;padding:6px 12px;font:700 13px system-ui,sans-serif;cursor:pointer';
+        ok.onclick = function () { if (busy() && !confirm('Đang scan/lưu hồ sơ — tải lại trang bây giờ? (các trang scan đã chụp vẫn được giữ trên máy)')) return; reloadTo(d.version, true); };
+        var x = document.createElement('button'); x.textContent = '✕'; x.title = 'Để sau';
+        x.style.cssText = 'background:transparent;color:#fff;border:0;font-size:15px;cursor:pointer';
+        x.onclick = function () { b.remove(); };
+        b.appendChild(t); b.appendChild(ok); b.appendChild(x);
+        document.body.appendChild(b);
+      }
+      function check() {
+        if (location.protocol === 'file:') return; // mở thẳng file trên máy: không có máy chủ để hỏi
+        fetch(new URL('version.json', document.baseURI).href + '?t=' + Date.now(), { cache: 'no-store' })
+          .then(function (r) { return r.ok ? r.json() : null; })
+          .then(function (d) {
+            if (!d || !d.version || d.version === window.APP_VERSION) return;
+            console.log('[Phiên bản] đang chạy', window.APP_VERSION, '-> có bản mới', d.version);
+            if (!busy() && reloadTo(d.version, false)) return;
+            if (document.body) banner(d); else document.addEventListener('DOMContentLoaded', function () { banner(d); });
+          })
+          .catch(function () { /* mất mạng / chưa có version.json -> bỏ qua */ });
+      }
+      check();
+      document.addEventListener('visibilitychange', function () {
+        if (document.hidden) { hiddenAt = Date.now(); return; }
+        if (hiddenAt && Date.now() - hiddenAt > 60000) check(); // mở lại app sau khi để nền
+      });
+    })();
+  </script>
+
   <!-- ICON HIỂN THỊ TRÊN TAB TRÌNH DUYỆT + KHI TẠO PHÍM TẮT NGOÀI MÀN HÌNH ĐIỆN THOẠI  -->
   <!-- Đặt file app-icon.ico cùng thư mục với index_KH113.html (và manifest.json) trên server  -->
   <link rel="icon" href="app-icon.ico" type="image/x-icon">
@@ -3860,7 +3921,8 @@
         // ra - đảm bảo LUÔN lấy đúng file dvhc2025.js nằm CÙNG THƯ MỤC với file
         // HTML đang mở (kể cả khi test cục bộ trên máy bằng cách mở trực tiếp
         // file, hay khi chạy qua 1 server nội bộ có đường dẫn lồng nhau).
-        s.src = new URL('dvhc2025.js', document.baseURI).href;
+        // ?v=<phiên bản>: đổi phiên bản trang thì tải lại cả dữ liệu Tỉnh/Xã (không dùng bản cũ trong bộ đệm).
+        s.src = new URL('dvhc2025.js', document.baseURI).href + '?v=' + encodeURIComponent(window.APP_VERSION || '');
         s.onload = () => { __dvhcScriptState = 'ready'; document.dispatchEvent(new Event('dvhc-ready')); resolve(); };
         s.onerror = () => {
           __dvhcScriptState = 'idle';
@@ -10362,6 +10424,7 @@ Bấm Hủy để chụp lại (nút 📷 trên trang), hoặc OK để vẫn l�
       $('scFileName').addEventListener('input', () => { st.nameTouched = true; markDuplicate(); });
 
       return {
+        busy: () => !!(st.open || st.uploading), // dùng cho tự cập nhật phiên bản: không tải lại khi đang scan/lưu
         open, close, setKind, setCamMode, toggleCamMode, toggleTheme, login, setSession, clearSession, manualCapture, onFiles, toggleTorch, toggleAuto, toggleSettings,
         showReview, backToCamera, onTypeChange, onPaperChange, updateName, editReset, editRotate, editApply, editCancel, confirmOk, confirmEdit, confirmRetake, confirmZoom,
         openFolderPicker, closeFolderPicker, createFolder, gotoPasted, gotoCommune, chooseCurrentFolder,
