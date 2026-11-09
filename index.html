@@ -3595,6 +3595,8 @@
 
           <div class="drive-field-label"><span>Email đăng nhập (chọn tài khoản Google trên máy)</span></div>
           <div id="googleSignInBtn"></div>
+          <input type="email" id="driveTrustedEmailInput" class="drive-input" placeholder="hoặc gõ email quản trị" autocomplete="email"
+            oninput="onTrustedEmailInput(this.value)" style="margin:0 0 6px;">
           <div id="googleSignedEmailBox" style="display:none;">
             <span>✓ <b id="googleSignedEmailText"></b></span>
             <button type="button" onclick="clearGoogleSignIn()">Đổi</button>
@@ -7065,6 +7067,42 @@
     let googleIdToken = null; // JWT do Google cấp sau khi chọn tài khoản - gửi lên Apps Script để XÁC THỰC thật (không tin trực tiếp email phía trình duyệt)
     let googleSignedEmail = '';
     let rememberedConfirmedEmail = ''; // email đã xác nhận ở lần mở trước, lấy từ localStorage - dùng khi không còn idToken (JWT) mới
+    // Email gõ tay được coi là ĐÃ XÁC THỰC mặc định (không cần chọn tài khoản Google).
+    // Chỉ mở nút "Đăng nhập" phía trình duyệt - vẫn phải đúng Tên đăng nhập/Mật khẩu
+    // (Apps Script kiểm tra), và Apps Script vẫn ghi kèm "(chưa xác thực)" vì không có ID token.
+    // KHÔNG ghi email thật trong mã nguồn: chỉ lưu mã băm SHA-256 của email (chữ thường, bỏ khoảng trắng).
+    // Thêm email mới: chạy  python -c "import hashlib;print(hashlib.sha256(b'email@vidu.com').hexdigest())"
+    // rồi dán chuỗi kết quả vào danh sách dưới.
+    const TRUSTED_EMAIL_HASHES = ['0cb124a864dfefca5159887f6e55f622889e71f709b4b0522a44215a553d09e9'];
+
+    async function isTrustedEmail(email) {
+      email = String(email || '').trim().toLowerCase();
+      if (!email || email.indexOf('@') < 1) return false;
+      try {
+        const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(email));
+        const hex = Array.from(new Uint8Array(buf), b => b.toString(16).padStart(2, '0')).join('');
+        return TRUSTED_EMAIL_HASHES.indexOf(hex) !== -1;
+      } catch (e) { return false; } // trình duyệt không có crypto.subtle (trang http không bảo mật) -> không nhận
+    }
+
+    // Gõ đúng email tin cậy (so theo mã băm) -> xác nhận luôn như vừa chọn tài khoản Google.
+    async function onTrustedEmailInput(value) {
+      const email = String(value || '').trim().toLowerCase();
+      if (!(await isTrustedEmail(email))) return;
+      const inp = document.getElementById('driveTrustedEmailInput');
+      if (inp.value.trim().toLowerCase() !== email) return; // người dùng đã gõ tiếp trong lúc đang băm
+      googleIdToken = null;
+      googleSignedEmail = '';
+      rememberedConfirmedEmail = email;
+      try { localStorage.setItem(GDRIVE_EMAIL_STORAGE, email); } catch (e) { /* bỏ qua nếu bị chặn */ }
+      inp.value = '';
+      inp.style.display = 'none';
+      document.getElementById('googleSignInBtn').style.display = 'none';
+      document.getElementById('googleSignedEmailText').textContent = email;
+      document.getElementById('googleSignedEmailBox').style.display = 'flex';
+      setDriveStatus('');
+      updateDriveLoginBtnState();
+    }
 
     // Chuẩn bị lại khu vực chọn email mỗi lần mở khung Drive. Nếu máy này đã từng
     // xác nhận 1 tài khoản Google trước đó (lưu trong GDRIVE_EMAIL_STORAGE) thì
@@ -7080,6 +7118,7 @@
         rememberedConfirmedEmail = savedEmail;
         btnEl.style.display = 'none';
         btnEl.innerHTML = '';
+        document.getElementById('driveTrustedEmailInput').style.display = 'none';
         document.getElementById('googleSignedEmailText').textContent = savedEmail;
         document.getElementById('googleSignedEmailBox').style.display = 'flex';
         updateDriveLoginBtnState();
@@ -7090,6 +7129,9 @@
       document.getElementById('googleSignedEmailBox').style.display = 'none';
       btnEl.style.display = '';
       btnEl.innerHTML = '';
+      const trustedInp = document.getElementById('driveTrustedEmailInput');
+      trustedInp.value = '';
+      trustedInp.style.display = '';
       updateDriveLoginBtnState();
 
       const loaded = await ensureGsiScriptLoaded();
@@ -7110,6 +7152,7 @@
     // được thì không cho đăng nhập, xem updateDriveLoginBtnState()/driveLogin()).
     function showGoogleAuthError() {
       document.getElementById('googleSignInBtn').style.display = 'none';
+      if (rememberedConfirmedEmail) return; // đã gõ email tin cậy trong lúc chờ tải nút Google
       setDriveStatus('Không xác thực được tài khoản Google trên máy này (mất mạng hoặc bị chặn) — vui lòng kiểm tra mạng rồi mở lại khung này để đăng nhập.', true);
     }
 
@@ -7123,6 +7166,7 @@
       document.getElementById('googleSignedEmailText').textContent = googleSignedEmail || '(đã chọn tài khoản)';
       document.getElementById('googleSignedEmailBox').style.display = 'flex';
       document.getElementById('googleSignInBtn').style.display = 'none';
+      document.getElementById('driveTrustedEmailInput').style.display = 'none';
       updateDriveLoginBtnState();
     }
 
@@ -8249,7 +8293,7 @@ body.hide-lbl-bg .lbl-style {
   <!-- ══ SCAN HỒ SƠ BẰNG CAMERA ĐIỆN THOẠI (giống chức năng Scan của app Google Drive) ══
        - Tự nhận diện viền tờ giấy (Đơn đăng ký A4, Giấy chứng nhận A4/A3, CCCD) bằng OpenCV.js,
          tự chụp khi giữ yên máy, cắt + nắn thẳng phối cảnh, bộ lọc Màu/Xám/Đen trắng.
-       - Nhiều trang -> 1 file PDF đúng khổ giấy (jsPDF), tải về máy hoặc lưu lên thư mục
+       - Nhiều trang -> 1 file PDF đúng khổ giấy (tự ghép từ ảnh JPEG, không giữ cả file trong RAM), tải về máy hoặc lưu lên thư mục
          Drive dùng chung qua Apps Script (DRIVE_AUTH_API_URL, action uploadScan); email người
          đăng nhập được ghi vào mô tả file + cột "Người up file" của sheet LichSuUpFile.
        - Thư viện chỉ tải khi mở trình scan lần đầu (không làm chậm lúc mở bản đồ). -->
@@ -8264,7 +8308,6 @@ body.hide-lbl-bg .lbl-style {
       ];
       // Bộ đọc mã QR (zxing-cpp bản WebAssembly) - đọc được QR nhỏ in trên CCCD sau khi phóng to + làm nét.
       const ZXING_URL = 'https://cdn.jsdelivr.net/npm/zxing-wasm@2.2.0/dist/iife/reader/index.js';
-      const JSPDF_URL = 'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js';
       // Kích thước khổ giấy (mm) -> tỉ lệ khung cắt; px chỉ dùng để chấm độ nét nhanh lúc chụp.
       // Ảnh lưu giữ nguyên độ phân giải ảnh gốc (xem processPage).
       const PAPER = {
@@ -8374,15 +8417,21 @@ body.hide-lbl-bg .lbl-style {
       }
       // Xử lý trang (cắt, xoay, lọc) rồi cất ảnh gốc + ảnh đã cắt xuống máy, bỏ canvas khỏi bộ nhớ.
       async function processAndStore(page, pk) {
-        const out = processPage(page, pk || paperOfPage(page), await getSrc(page));
+        const hadSrc = !!page.src, src = await getSrc(page);
+        const out = processPage(page, pk || paperOfPage(page), src);
         if (page.src) {
           await idb.put('blob', page.id + ':src', page.srcBlob || await toBlob(page.src, 0.95));
           page.src = null; page.srcBlob = null;
         }
+        if (!hadSrc) freeCanvas(src); // ảnh gốc đọc lại từ máy chỉ để xử lý -> trả RAM ngay
         await idb.put('blob', page.id + ':out', await toBlob(out, outQ(page)));
+        freeCanvas(out);
         page.done = true;
         saveManifest();
       }
+      // Trả bộ nhớ canvas NGAY (điện thoại Android thu hồi canvas rất chậm -> chụp nhiều trang dễ bị đóng tab).
+      // Chỉ dùng cho canvas tạm không còn ai giữ.
+      function freeCanvas(c) { try { if (c && c.width) { c.width = 0; c.height = 0; } } catch (e) { } }
       function dropPage(p) {
         if (!p) return;
         p.src = null; p.srcBlob = null; p.done = false;
@@ -8459,10 +8508,6 @@ body.hide-lbl-bg .lbl-style {
         })();
         return cvPromise;
       }
-      async function ensureJsPdf() {
-        if (!(window.jspdf && window.jspdf.jsPDF)) await loadScript(JSPDF_URL, 60000);
-        return window.jspdf.jsPDF;
-      }
       function readJson(key, def) { try { const v = JSON.parse(localStorage.getItem(key) || 'null'); return v == null ? def : v; } catch (e) { return def; } }
       function writeJson(key, v) { try { localStorage.setItem(key, JSON.stringify(v)); } catch (e) { /* bị chặn bộ nhớ -> bỏ qua */ } }
       function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
@@ -8535,78 +8580,246 @@ body.hide-lbl-bg .lbl-style {
       }
 
       // ── NHẬN DIỆN VIỀN TỜ GIẤY (OpenCV) ───────────────────────────────────────────
-      function bestQuadIn(bin, mode, minArea) {
+      // Cách làm (giống trình scan của Google Drive): dò nhiều cách (cạnh mạnh/yếu, cạnh theo màu, độ sáng, độ
+      // nhạt màu) -> gom MỌI tứ giác ứng viên -> chấm điểm (viền ảnh có chạy đúng theo 4 cạnh không, độ đặc, tỉ lệ
+      // khổ giấy) -> chọn điểm cao nhất -> tinh chỉnh từng cạnh trên ảnh độ phân giải cao (refineQuadEdges).
+      const PAPER_RATIO = { A4: 297 / 210, A3: 420 / 297, card: 85.6 / 54 };
+      // Giao điểm 2 đường thẳng, mỗi đường cho bởi [điểm, véc-tơ chỉ phương].
+      function lineX(l1, l2) {
+        const [[x1, y1], [dx1, dy1]] = l1, [[x2, y2], [dx2, dy2]] = l2, den = dx1 * dy2 - dy1 * dx2;
+        if (Math.abs(den) < 1e-9) return null;
+        const t = ((x2 - x1) * dy2 - (y2 - y1) * dx2) / den;
+        return [x1 + t * dx1, y1 + t * dy1];
+      }
+      function isConvexQuad(q) {
+        let sg = 0;
+        for (let i = 0; i < 4; i++) {
+          const a = q[i], b = q[(i + 1) % 4], c = q[(i + 2) % 4];
+          const z = (b[0] - a[0]) * (c[1] - b[1]) - (b[1] - a[1]) * (c[0] - b[0]);
+          if (!z || (sg && Math.sign(z) !== sg)) return false;
+          sg = Math.sign(z);
+        }
+        return true;
+      }
+      // Viền bị mất 1 góc (ngón tay đè, góc giấy quăn/rách): bao lồi ra 5-8 đỉnh -> lấy 4 cạnh dài nhất, kéo dài
+      // rồi cắt nhau để dựng lại góc bị che.
+      function quadFromHull(hull) {
+        const cv = window.cv, ap = new cv.Mat();
+        try {
+          cv.approxPolyDP(hull, ap, 0.012 * cv.arcLength(hull, true), true);
+          const n = ap.rows; if (n < 5 || n > 8) return null;
+          const d = ap.data32S, P = []; for (let i = 0; i < n; i++) P.push([d[2 * i], d[2 * i + 1]]);
+          const E = P.map((p, i) => { const v = [P[(i + 1) % n][0] - p[0], P[(i + 1) % n][1] - p[1]]; return { i, p, v, len: Math.hypot(v[0], v[1]) }; });
+          const top = E.slice().sort((x, y) => y.len - x.len).slice(0, 4).sort((x, y) => x.i - y.i);
+          const q = [];
+          for (let k = 0; k < 4; k++) { const x = lineX([top[k].p, top[k].v], [top[(k + 1) % 4].p, top[(k + 1) % 4].v]); if (!x) return null; q.push(x); }
+          return isConvexQuad(q) ? q : null;
+        } finally { ap.delete(); }
+      }
+      // Gom mọi tứ giác lồi (diện tích > minArea) tìm được trong ảnh nhị phân bin vào list.
+      function quadCandidates(bin, mode, minArea, list) {
         const cv = window.cv, contours = new cv.MatVector(), hier = new cv.Mat();
-        let best = null, bestArea = 0;
         try {
           cv.findContours(bin, contours, hier, mode, cv.CHAIN_APPROX_SIMPLE);
           for (let i = 0; i < contours.size(); i++) {
-            const c = contours.get(i);
-            const area = cv.contourArea(c);
-            if (area > minArea && area > bestArea) {
-              let approx = new cv.Mat();
-              cv.approxPolyDP(c, approx, 0.02 * cv.arcLength(c, true), true);
-              if (!(approx.rows === 4 && cv.isContourConvex(approx))) {
-                // Viền không ra đúng 4 góc (vd GCN A3 mở ra có nếp gấp giữa làm lõm viền, góc bị mòn):
-                // lấy bao lồi của viền rồi nới dần độ đơn giản hoá cho tới khi còn 4 góc.
-                // Chỉ khi viền gần như kín và đặc (diện tích viền >= 90% bao lồi, vd nếp gấp A3); viền dính
-                // lẫn với nét nền (bàn phím, vân bàn...) thì bỏ, tránh cắt ra hình méo to hơn tờ giấy.
-                const hull = new cv.Mat();
-                cv.convexHull(c, hull, false, true);
-                if (area >= cv.contourArea(hull) * 0.9) {
-                  const per = cv.arcLength(hull, true);
-                  for (const eps of [0.02, 0.03, 0.045, 0.06, 0.08]) {
-                    approx.delete(); approx = new cv.Mat();
-                    cv.approxPolyDP(hull, approx, eps * per, true);
-                    if (approx.rows <= 4) break;
+            const c = contours.get(i), area = cv.contourArea(c);
+            if (area > minArea) {
+              const ap = new cv.Mat(), hull = new cv.Mat();
+              try {
+                cv.approxPolyDP(c, ap, 0.02 * cv.arcLength(c, true), true);
+                if (ap.rows === 4 && cv.isContourConvex(ap)) {
+                  const d = ap.data32S; list.push({ q: [[d[0], d[1]], [d[2], d[3]], [d[4], d[5]], [d[6], d[7]]], area });
+                } else {
+                  // Không ra đúng 4 góc (nếp gấp GCN A3 làm lõm viền, góc mòn, bị che): chỉ xét khi viền gần như
+                  // kín và đặc (>= 85% bao lồi), tránh viền dính lẫn nét nền (vân bàn, bàn phím...).
+                  cv.convexHull(c, hull, false, true);
+                  if (area >= cv.contourArea(hull) * 0.85) {
+                    const per = cv.arcLength(hull, true);
+                    for (const eps of [0.02, 0.03, 0.045, 0.06]) {
+                      const a2 = new cv.Mat(); cv.approxPolyDP(hull, a2, eps * per, true);
+                      const ok = a2.rows === 4 && cv.contourArea(a2) <= area * 1.12, d = a2.data32S;
+                      if (ok) list.push({ q: [[d[0], d[1]], [d[2], d[3]], [d[4], d[5]], [d[6], d[7]]], area });
+                      a2.delete(); if (ok) break;
+                    }
+                    const hq = quadFromHull(hull);
+                    if (hq) list.push({ q: hq, area });
                   }
-                  // Tứ giác tìm được phải sát viền thật (không phình quá 12%).
-                  if (approx.rows === 4 && Math.abs(cv.contourArea(approx)) > area * 1.12) { approx.delete(); approx = new cv.Mat(); }
                 }
-                hull.delete();
-              }
-              if (approx.rows === 4 && cv.isContourConvex(approx)) {
-                const d = approx.data32S;
-                best = [[d[0], d[1]], [d[2], d[3]], [d[4], d[5]], [d[6], d[7]]]; bestArea = area;
-              }
-              approx.delete();
+              } finally { ap.delete(); hull.delete(); }
             }
             c.delete();
           }
         } finally { contours.delete(); hier.delete(); }
-        return best;
       }
-      function detectQuad(canvas) {
-        if (!cvOk()) return null;
-        const cv = window.cv;
-        const src = cv.imread(canvas), gray = new cv.Mat(), edges = new cv.Mat(), th = new cv.Mat();
-        try {
-          // Thẻ CCCD nhỏ trong khung hình -> hạ ngưỡng diện tích (giấy A4/A3 vẫn 15%).
-          const minArea = canvas.width * canvas.height * (paperKey() === 'card' ? 0.03 : 0.15);
-          cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
-          cv.GaussianBlur(gray, gray, new cv.Size(5, 5), 0);
-          // Lượt 1: theo cạnh (Canny) - tốt với giấy trên mặt bàn có vân/màu.
-          cv.Canny(gray, edges, 40, 120);
-          const k = cv.Mat.ones(3, 3, cv.CV_8U); cv.dilate(edges, edges, k); k.delete();
-          let q = bestQuadIn(edges, cv.RETR_LIST, minArea);
-          // Lượt 2: tách nền theo độ sáng (Otsu) - tốt với giấy trắng trên nền tối.
-          if (!q) {
-            cv.threshold(gray, th, 0, 255, cv.THRESH_BINARY + cv.THRESH_OTSU);
-            q = bestQuadIn(th, cv.RETR_EXTERNAL, minArea);
+      // Tỉ lệ điểm trên 4 cạnh tứ giác có nét viền thật (bản đồ cạnh E, rộng w) trong phạm vi ±2px.
+      function edgeSupport(E, w, h, q) {
+        let all = 0, minSide = 1;
+        for (let i = 0; i < 4; i++) {
+          const a = q[i], b = q[(i + 1) % 4], L = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1;
+          const nx = -(b[1] - a[1]) / L, ny = (b[0] - a[0]) / L, N = 40;
+          let hit = 0;
+          for (let k = 0; k < N; k++) {
+            const f = 0.05 + 0.9 * k / (N - 1), x = a[0] + (b[0] - a[0]) * f, y = a[1] + (b[1] - a[1]) * f;
+            for (let t = -2; t <= 2; t++) {
+              const xi = Math.round(x + nx * t), yi = Math.round(y + ny * t);
+              if (xi >= 0 && yi >= 0 && xi < w && yi < h && E[yi * w + xi]) { hit++; break; }
+            }
           }
-          return q ? orderQuad(q) : null;
-        } catch (e) { return null; }
-        finally { src.delete(); gray.delete(); edges.delete(); th.delete(); }
+          all += hit / N; minSide = Math.min(minSide, hit / N);
+        }
+        return { mean: all / 4, min: minSide };
       }
-      // Nhận diện trên ảnh lớn: thu nhỏ còn ~800px để chạy nhanh rồi nhân ngược lại.
+      // Điểm ứng viên: viền khớp nét thật (quan trọng nhất), độ đặc, tỉ lệ gần khổ giấy, không trùng mép ảnh.
+      function scoreQuad(cand, E, w, h) {
+        const q = orderQuad(cand.q);
+        if (!paperLike(q) || !isConvexQuad(q)) return -1;
+        const qa = quadArea(q), img = w * h;
+        if (qa > img * 0.95) return -1;
+        const m = 3, onBorder = q.filter(([x, y]) => x < m || y < m || x > w - 1 - m || y > h - 1 - m).length;
+        if (onBorder >= 3) return -1; // trùng khung ảnh -> nhận nhầm cả ảnh
+        const sup = edgeSupport(E, w, h, q);
+        const fill = Math.min(1, cand.area / qa);
+        const [qw, qh] = quadDims(q), r = Math.max(qw, qh) / Math.max(1, Math.min(qw, qh));
+        const lr = Math.log(r / (PAPER_RATIO[paperKey()] || 1.414)), aspect = Math.exp(-lr * lr / (2 * 0.2 * 0.2));
+        return sup.mean * sup.mean * (0.5 + 0.5 * sup.min) * fill * (0.6 + 0.4 * aspect) * (0.6 + 0.4 * Math.sqrt(qa / img)) * (onBorder ? 0.85 : 1);
+      }
+      // thorough = true: dò kỹ (ảnh đã chụp); false: dò nhanh cho khung video trực tiếp.
+      function detectQuad(canvas, thorough) {
+        if (!cvOk()) return null;
+        const cv = window.cv, mats = [];
+        const M = () => { const m = new cv.Mat(); mats.push(m); return m; };
+        try {
+          const src = cv.imread(canvas); mats.push(src);
+          const w = canvas.width, h = canvas.height;
+          // Thẻ CCCD nhỏ trong khung hình -> hạ ngưỡng diện tích (giấy A4/A3 12%).
+          const minArea = w * h * (paperKey() === 'card' ? 0.03 : 0.12);
+          const gray = M(); cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+          cv.GaussianBlur(gray, gray, new cv.Size(5, 5), 0);
+          const k3 = cv.Mat.ones(3, 3, cv.CV_8U); mats.push(k3);
+          const list = [];
+          const canny = (m, lo, hi) => { const e = M(); cv.Canny(m, e, lo, hi); return e; };
+          const tryEdges = e => { const d = M(); cv.dilate(e, d, k3); quadCandidates(d, cv.RETR_LIST, minArea, list); };
+          // sup: bản đồ nét dùng để chấm điểm (cạnh xám, + cạnh theo màu khi dò kỹ).
+          const E1 = canny(gray, 40, 120); tryEdges(E1);
+          const sup = M(); E1.copyTo(sup);
+          const otsu = M(); cv.threshold(gray, otsu, 0, 255, cv.THRESH_BINARY + cv.THRESH_OTSU);
+          quadCandidates(otsu, cv.RETR_EXTERNAL, minArea, list);
+          if (thorough) {
+            tryEdges(canny(gray, 15, 45)); // giấy trắng trên bàn sáng, ảnh hơi mờ
+            // Cạnh theo màu: Canny từng kênh R, G, B rồi gộp (giấy trắng trên bàn vàng/xanh nhạt cùng độ sáng).
+            const rgb = M(); cv.cvtColor(src, rgb, cv.COLOR_RGBA2RGB); cv.GaussianBlur(rgb, rgb, new cv.Size(5, 5), 0);
+            const ch = new cv.MatVector(); cv.split(rgb, ch);
+            // Mỗi lần MatVector.get() trả về 1 Mat MỚI -> giữ lại đúng đối tượng đó để delete (không thì rò bộ nhớ).
+            const chs = [ch.get(0), ch.get(1), ch.get(2)];
+            const Ec = M(); cv.Canny(chs[0], Ec, 25, 75);
+            for (let i = 1; i < 3; i++) { const e = new cv.Mat(); cv.Canny(chs[i], e, 25, 75); cv.bitwise_or(Ec, e, Ec); e.delete(); }
+            chs.forEach(m => m.delete()); ch.delete();
+            tryEdges(Ec); cv.bitwise_or(sup, Ec, sup);
+            // Độ bão hoà màu thấp (giấy trắng/xám) so với nền có màu -> tách theo Otsu.
+            const hsv = M(); cv.cvtColor(rgb, hsv, cv.COLOR_RGB2HSV);
+            const hv = new cv.MatVector(); cv.split(hsv, hv);
+            const hs = [hv.get(0), hv.get(1), hv.get(2)];
+            const S = M(); hs[1].copyTo(S); hs.forEach(m => m.delete()); hv.delete();
+            const sth = M(); cv.threshold(S, sth, 0, 255, cv.THRESH_BINARY_INV + cv.THRESH_OTSU);
+            cv.morphologyEx(sth, sth, cv.MORPH_OPEN, k3);
+            quadCandidates(sth, cv.RETR_EXTERNAL, minArea, list);
+            // Ánh sáng không đều: chia cho nền làm mờ rồi mới Otsu theo độ sáng.
+            const bgm = M(), kb = (Math.round(Math.max(w, h) / 4) | 1); cv.blur(gray, bgm, new cv.Size(kb, kb));
+            const norm = M(); cv.divide(gray, bgm, norm, 128);
+            const nth = M(); cv.threshold(norm, nth, 0, 255, cv.THRESH_BINARY + cv.THRESH_OTSU);
+            quadCandidates(nth, cv.RETR_EXTERNAL, minArea, list);
+          }
+          const E = sup.data;
+          // Ngưỡng 0.25: ảnh giấy thật thường đạt 0.6-0.9; ảnh không có giấy (vật hình chữ nhật lộn xộn) ~0.1.
+          let best = null, bestScore = 0.25;
+          for (const c of list) { const sc = scoreQuad(c, E, w, h); if (sc > bestScore) { bestScore = sc; best = c.q; } }
+          return best ? orderQuad(best) : null;
+        } catch (e) { console.warn('[Scan] dò viền:', e && e.message); return null; }
+        finally { mats.forEach(m => { try { m.delete(); } catch (e) { } }); }
+      }
+      // Ảnh xám thu nhỏ (cạnh dài ≤ maxDim) để tinh chỉnh viền.
+      function grayOf(c, maxDim) {
+        const s = Math.min(1, maxDim / Math.max(c.width, c.height));
+        const t = document.createElement('canvas'); t.width = Math.round(c.width * s); t.height = Math.round(c.height * s);
+        const x = t.getContext('2d'); x.drawImage(c, 0, 0, t.width, t.height);
+        const d = x.getImageData(0, 0, t.width, t.height).data, g = new Float32Array(t.width * t.height);
+        for (let i = 0, j = 0; i < g.length; i++, j += 4) g[i] = 0.299 * d[j] + 0.587 * d[j + 1] + 0.114 * d[j + 2];
+        const r = { g, w: t.width, h: t.height, s }; freeCanvas(t); return r;
+      }
+      function fitLine(P) { // đường thẳng bình phương tối thiểu toàn phần: [tâm, chỉ phương]
+        let mx = 0, my = 0; P.forEach(p => { mx += p[0]; my += p[1]; }); mx /= P.length; my /= P.length;
+        let sxx = 0, sxy = 0, syy = 0; P.forEach(p => { const dx = p[0] - mx, dy = p[1] - my; sxx += dx * dx; sxy += dx * dy; syy += dy * dy; });
+        const th = 0.5 * Math.atan2(2 * sxy, sxx - syy);
+        return [[mx, my], [Math.cos(th), Math.sin(th)]];
+      }
+      // Tinh chỉnh 4 cạnh trên ảnh lớn (~1600px): dọc mỗi cạnh lấy 48 điểm, mỗi điểm dò theo pháp tuyến tìm chỗ
+      // đổi sáng mạnh nhất (cùng chiều giữa các điểm), khớp đường thẳng bỏ điểm lạc (chữ, bóng, ngón tay) rồi cắt
+      // nhau ra 4 góc. Cạnh không đủ điểm tin cậy thì giữ nguyên cạnh cũ.
+      function refineQuadEdges(c, q) {
+        try {
+          const { g, w, h, s } = grayOf(c, 1600);
+          const Q = q.map(([x, y]) => [x * s, y * s]);
+          const cx = Q.reduce((a, p) => a + p[0], 0) / 4, cy = Q.reduce((a, p) => a + p[1], 0) / 4;
+          const R = Math.max(5, Math.round(Math.max(w, h) * 0.012)), N = 48;
+          const I = (x, y) => { const xi = Math.round(x), yi = Math.round(y); return xi < 0 || yi < 0 || xi >= w || yi >= h ? NaN : g[yi * w + xi]; };
+          const lines = [];
+          for (let i = 0; i < 4; i++) {
+            const a = Q[i], b = Q[(i + 1) % 4], L = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1;
+            const tx = (b[0] - a[0]) / L, ty = (b[1] - a[1]) / L;
+            let nx = -ty, ny = tx;
+            if (((a[0] + b[0]) / 2 - cx) * nx + ((a[1] + b[1]) / 2 - cy) * ny < 0) { nx = -nx; ny = -ny; } // pháp tuyến hướng ra ngoài
+            const samples = [];
+            for (let k = 0; k < N; k++) {
+              const f = 0.06 + 0.88 * k / (N - 1), px = a[0] + (b[0] - a[0]) * f, py = a[1] + (b[1] - a[1]) * f;
+              const prof = [];
+              for (let t = -R; t <= R; t++) {
+                let sum = 0, n = 0;
+                for (let u = -2; u <= 2; u++) {
+                  const ox = px + tx * u * 2, oy = py + ty * u * 2;
+                  const o = I(ox + nx * (t + 1.5), oy + ny * (t + 1.5)), iN = I(ox + nx * (t - 1.5), oy + ny * (t - 1.5));
+                  if (!isNaN(o) && !isNaN(iN)) { sum += o - iN; n++; }
+                }
+                prof.push(n ? sum / n : 0);
+              }
+              samples.push({ px, py, prof });
+            }
+            // Chiều đổi sáng chung của cạnh (giấy sáng hơn nền hay ngược lại) theo đa số điểm.
+            let pos = 0, neg = 0;
+            samples.forEach(sp => { let m = 0, v = 0; sp.prof.forEach(x => { if (Math.abs(x) > m) { m = Math.abs(x); v = x; } }); if (m >= 6) { if (v > 0) pos++; else neg++; } });
+            const sign = pos >= neg ? 1 : -1;
+            let P = [];
+            samples.forEach(sp => {
+              let bt = 0, bv = 0; sp.prof.forEach((x, j) => { if (x * sign > bv) { bv = x * sign; bt = j - R; } });
+              if (bv >= 6) P.push([sp.px + nx * bt, sp.py + ny * bt]);
+            });
+            let line = null;
+            for (let it = 0; it < 3 && P.length >= N * 0.35; it++) {
+              line = fitLine(P);
+              const [[mx, my], [dx, dy]] = line, res = P.map(p => Math.abs((p[0] - mx) * dy - (p[1] - my) * dx));
+              const med = res.slice().sort((x, y) => x - y)[res.length >> 1], lim = Math.max(1.2, 2.5 * med);
+              const keep = P.filter((p, j) => res[j] <= lim); if (keep.length === P.length) break; P = keep;
+            }
+            if (!line || P.length < N * 0.35) line = [a, [tx, ty]];
+            else line = [[line[0][0] - nx * 0.5, line[0][1] - ny * 0.5], line[1]]; // lùi vào trong 0.5px: bỏ dải nền lẫn ở mép
+            lines.push(line);
+          }
+          const out = [];
+          for (let i = 0; i < 4; i++) {
+            const x = lineX(lines[(i + 3) % 4], lines[i]);
+            if (!x || Math.hypot(x[0] - Q[i][0], x[1] - Q[i][1]) > R * 2.5) return q; // lệch quá xa -> giữ kết quả dò
+            out.push([x[0] / s, x[1] / s]);
+          }
+          return isConvexQuad(out) && paperLike(out) ? out : q;
+        } catch (e) { console.warn('[Scan] tinh chỉnh viền:', e && e.message); return q; }
+      }
+      // Nhận diện trên ảnh lớn (ảnh đã chụp): dò kỹ trên bản thu nhỏ ~800px, nhân ngược lại rồi tinh chỉnh cạnh
+      // trên ảnh gốc.
       function detectOnLarge(c) {
         const s = Math.min(1, 800 / Math.max(c.width, c.height));
         detCanvas.width = Math.round(c.width * s); detCanvas.height = Math.round(c.height * s);
         detCanvas.getContext('2d').drawImage(c, 0, 0, detCanvas.width, detCanvas.height);
-        const q = detectQuad(detCanvas);
-        // Viền gần trùng mép ảnh = nhận nhầm cả ảnh (nền đồng màu) -> coi như không thấy viền.
-        const whole = q && quadArea(q) > detCanvas.width * detCanvas.height * 0.92;
-        return q && !whole && paperLike(q) ? q.map(([x, y]) => [x / s, y / s]) : null;
+        const q = detectQuad(detCanvas, true);
+        return q ? refineQuadEdges(c, q.map(([x, y]) => [x / s, y / s])) : null;
       }
 
       // ── XỬ LÝ ẢNH: nắn phối cảnh, xoay, bộ lọc ─────────────────────────────────────
@@ -8750,13 +8963,16 @@ Bấm Hủy để chụp lại (nút 📷 trên trang), hoặc OK để vẫn l�
         const short = Math.max(1, Math.round(long * ratio));
         const [ow, oh] = qw >= qh ? [long, short] : [short, long];
         let out = warp(src, page.quad, ow, oh);
+        const unrot = out;
         out = rotateCanvas(out, page.rot);
+        if (out !== unrot) freeCanvas(unrot);
         page.sharp = sharpScore(out);
         console.log('[Scan] độ nét', Math.round(page.sharp));
         applyFilter(out, page.filter);
         page.outW = out.width; page.outH = out.height;
         const t = limitSize(out, 360);
         page.thumb = t.toDataURL('image/jpeg', 0.75);
+        if (t !== out) freeCanvas(t);
         return out;
       }
       function queueProcess(page) {
@@ -8976,7 +9192,7 @@ Bấm Hủy để chụp lại (nút 📷 trên trang), hoặc OK để vẫn l�
         if (!st.open || !st.stream || st.mode !== 'camera') { st.loop = 0; return; }
         st.loop = requestAnimationFrame(tick);
         const now = performance.now();
-        if (now - st.lastDet < 110) return;
+        if (now - st.lastDet < (st.detGap || 110)) return;
         st.lastDet = now;
         const v = $('scVideo');
         if (!v.videoWidth) return;
@@ -8987,8 +9203,15 @@ Bấm Hủy để chụp lại (nút 📷 trên trang), hoặc OK để vẫn l�
           const s = Math.min(1, 480 / Math.max(v.videoWidth, v.videoHeight));
           detCanvas.width = Math.round(v.videoWidth * s); detCanvas.height = Math.round(v.videoHeight * s);
           detCanvas.getContext('2d').drawImage(v, 0, 0, detCanvas.width, detCanvas.height);
-          const q = detectQuad(detCanvas);
-          if (q && paperLike(q)) qn = q.map(([x, y]) => [x / detCanvas.width, y / detCanvas.height]);
+          // Dò nhanh mỗi khung; cảnh khó (dò nhanh trượt 2 lần liên tiếp: bàn sáng, nền màu, bóng đổ) chuyển sang
+          // dò kỹ và giữ chế độ đó tới khi dò kỹ trượt 3 lần. Nhịp dò giãn theo thời gian xử lý để máy yếu không giật.
+          const t0 = performance.now();
+          const q = detectQuad(detCanvas, !!st.detDeep);
+          const found = !!(q && paperLike(q));
+          if (found) qn = q.map(([x, y]) => [x / detCanvas.width, y / detCanvas.height]);
+          if (st.detDeep) { st.detMiss = found ? 0 : (st.detMiss || 0) + 1; if (st.detMiss >= 3) { st.detDeep = false; st.detMiss = 0; } }
+          else { st.detMiss = found ? 0 : (st.detMiss || 0) + 1; if (st.detMiss >= 2) { st.detDeep = true; st.detMiss = 0; } }
+          st.detGap = Math.max(110, Math.min(400, (performance.now() - t0) * 2.5));
         }
         autoLogic(qn, now);
       }
@@ -9128,13 +9351,15 @@ Bấm Hủy để chụp lại (nút 📷 trên trang), hoặc OK để vẫn l�
           // Ảnh gốc chỉ dùng khi giấy VẪN nằm đúng vùng đã quét (dò lại được viền trong vùng đó).
           // Chụp ảnh gốc mất ~1 giây: nếu tay/giấy đã xê dịch thì lưu khung hình đúng lúc báo quét
           // thành công (fc) cắt theo viền đã quét -> không bao giờ lưu sai vùng.
-          const atScan = qn ? (() => { const p = qn.map(([x, y]) => [x * W, y * H]); return refineInRoi(fc, p) || p; })() : null;
+          // Viền trên khung video (atScan) chỉ tính khi KHÔNG dùng được ảnh gốc: mỗi lần dò kỹ + tinh chỉnh cạnh tốn
+          // ~1 giây trên điện thoại, không tính thừa thì chụp tự động xong nhanh hơn.
+          const atScan = () => { const p = qn.map(([x, y]) => [x * W, y * H]); return refineInRoi(fc, p) || p; };
           const fromPhoto = photo && qn && sameOrient ? refineInRoi(photo, mapVideoQuadToPhoto(qn, W, H, photo.width, photo.height)) : null;
           if (fromPhoto) {
             src = photo; q = fromPhoto;
           } else if (qn) {
             if (photo) console.log('[Scan] giấy đã xê dịch khi chụp ảnh gốc -> lưu khung hình lúc quét thành công');
-            src = fc; q = atScan;
+            src = fc; q = atScan();
           } else if (photo && !qn && sameOrient) {
             src = photo; q = detectOnLarge(photo);
           } else {
@@ -9179,6 +9404,7 @@ Bấm Hủy để chụp lại (nút 📷 trên trang), hoặc OK để vẫn l�
             URL.revokeObjectURL(url);
             if (/^image\/(jpeg|png|webp)$/i.test(f.type)) c0._blob = f;
             const c = limitPixels(c0);
+            if (c !== c0) freeCanvas(c0);
             // Dò viền trên cả ảnh, rồi dò lại trong vùng giữa ảnh; không thấy thì lấy nguyên ảnh (không mở khung kéo góc).
             const [bx, by, bw, bh] = guideBox(c.width, c.height);
             const gq = [[bx, by], [bx + bw, by], [bx + bw, by + bh], [bx, by + bh]].map(([x, y]) => [x * c.width, y * c.height]);
@@ -9665,10 +9891,14 @@ Bấm Hủy để chụp lại (nút 📷 trên trang), hoặc OK để vẫn l�
         if (!getSession()) await ensureSession();
         const s = getSession();
         if (!s) { const e = new Error('Chưa đăng nhập (hoặc phiên đã hết hạn) — bấm “Đăng nhập để lưu lên Drive”.'); e.code = 'NO_SESSION'; throw e; }
+        // Trường pdfBase64 là Blob (file lớn) -> ghép Blob thân request quanh nó thay vì JSON.stringify cả chuỗi.
+        const big = body && body.pdfBase64 instanceof Blob ? body.pdfBase64 : null;
+        const json = JSON.stringify(Object.assign({ action, sessionToken: s.token }, body, big ? { pdfBase64: undefined } : {}));
+        const payload = big ? new Blob([json.slice(0, -1), ',"pdfBase64":"', big, '"}'], { type: 'text/plain;charset=utf-8' }) : json;
         const res = await fetch(DRIVE_AUTH_API_URL, {
           method: 'POST',
           headers: { 'Content-Type': 'text/plain;charset=utf-8' }, // tránh preflight CORS (Apps Script không hỗ trợ)
-          body: JSON.stringify(Object.assign({ action, sessionToken: s.token }, body))
+          body: payload
         });
         let data;
         try { data = await res.json(); } catch (e) { throw new Error('Máy chủ trả về dữ liệu không hợp lệ (HTTP ' + res.status + ').'); }
@@ -9783,43 +10013,72 @@ Bấm Hủy để chụp lại (nút 📷 trên trang), hoặc OK để vẫn l�
       }
 
       // ── XUẤT PDF + LƯU ────────────────────────────────────────────────────────────
-      async function buildPdf(qual) {
-        qual = qual || 0.95;
-        const jsPDF = await ensureJsPdf();
+      // Tự ghép file PDF từ các file JPEG đã lưu tạm trên máy (ảnh nhúng nguyên dạng DCTDecode), KHÔNG dùng jsPDF:
+      // jsPDF giữ mọi ảnh trong RAM rồi xuất cả file thành chuỗi -> 20 trang ảnh 12MP đã chiếm vài trăm MB, điện
+      // thoại đóng tab. Ở đây PDF là 1 Blob ghép từ các Blob ảnh (trình duyệt tự để trên đĩa), RAM gần như không tăng.
+      const MM_PT = 72 / 25.4;
+      const PDF_LEVELS = [ // nén dần khi file vượt giới hạn gửi lên: chất lượng JPEG + độ phân giải tối đa (dpi theo khổ giấy)
+        { q: 0.95, dpi: 0 }, { q: 0.85, dpi: 0 }, { q: 0.8, dpi: 300 }, { q: 0.72, dpi: 250 }, { q: 0.62, dpi: 200 }, { q: 0.5, dpi: 150 }
+      ];
+      // Chuỗi thông tin PDF (tiếng Việt) -> chuỗi hex UTF-16BE có BOM, chỉ gồm ký tự ASCII.
+      const pdfText = s => '<FEFF' + Array.from(String(s || ''), ch => {
+        let h = ''; for (let i = 0; i < ch.length; i++) h += ch.charCodeAt(i).toString(16).padStart(4, '0'); return h;
+      }).join('').toUpperCase() + '>';
+      function pdfDate(d) {
+        const p = n => String(n).padStart(2, '0');
+        return `(D:${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())})`;
+      }
+      // pages: [{ blob: JPEG, w, h (px), W, H (pt) }] -> Blob PDF.
+      function assemblePdf(pages, info) {
+        const parts = [], offs = [];
+        let pos = 0;
+        const add = x => { parts.push(x); pos += typeof x === 'string' ? x.length : (x.size != null ? x.size : x.byteLength); };
+        const obj = (n, body) => { offs[n] = pos; add(`${n} 0 obj\n${body}\nendobj\n`); };
+        add('%PDF-1.4\n'); add(new Uint8Array([37, 226, 227, 207, 211, 10]));
+        const first = 4, kids = pages.map((_, i) => `${first + i * 3} 0 R`).join(' ');
+        obj(1, '<< /Type /Catalog /Pages 2 0 R >>');
+        obj(2, `<< /Type /Pages /Count ${pages.length} /Kids [${kids}] >>`);
+        obj(3, '<< ' + Object.entries(info).filter(([, v]) => v).map(([k, v]) => `/${k} ${k === 'CreationDate' ? v : pdfText(v)}`).join(' ') + ' >>');
+        pages.forEach((p, i) => {
+          const n = first + i * 3, W = p.W.toFixed(2), H = p.H.toFixed(2), cs = `q ${W} 0 0 ${H} 0 0 cm /Im0 Do Q`;
+          obj(n, `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${W} ${H}] /Resources << /XObject << /Im0 ${n + 2} 0 R >> >> /Contents ${n + 1} 0 R >>`);
+          obj(n + 1, `<< /Length ${cs.length} >>\nstream\n${cs}\nendstream`);
+          offs[n + 2] = pos;
+          add(`${n + 2} 0 obj\n<< /Type /XObject /Subtype /Image /Width ${p.w} /Height ${p.h} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${p.blob.size} >>\nstream\n`);
+          add(p.blob); add('\nendstream\nendobj\n');
+        });
+        const size = first + pages.length * 3, xref = pos;
+        let x = `xref\n0 ${size}\n0000000000 65535 f \n`;
+        for (let n = 1; n < size; n++) x += String(offs[n]).padStart(10, '0') + ' 00000 n \n';
+        add(x + `trailer\n<< /Size ${size} /Root 1 0 R /Info 3 0 R >>\nstartxref\n${xref}\n%%EOF\n`);
+        return new Blob(parts, { type: 'application/pdf' });
+      }
+      // Ảnh 1 trang theo mức nén: mức gốc dùng thẳng file JPEG đã lưu; mức khác đọc lại, thu nhỏ (nếu có dpi), mã hoá lại.
+      async function pageJpeg(p, lv, longMm) {
+        const q = p.filter === 'bw' ? Math.min(0.85, lv.q) : lv.q;
+        const maxLong = lv.dpi && longMm ? Math.round(longMm / 25.4 * lv.dpi) : 0;
+        const needScale = maxLong && Math.max(p.outW, p.outH) > maxLong;
+        if (q >= outQ(p) && !needScale) return { blob: await getOutBlob(p), w: p.outW, h: p.outH };
+        const c = await getOut(p), s = needScale ? limitSize(c, maxLong) : c;
+        try { return { blob: await toBlob(s, q), w: s.width, h: s.height }; }
+        finally { if (s !== c) freeCanvas(s); freeCanvas(c); }
+      }
+      // Tạo PDF của loại hồ sơ đang mở. maxBytes: giới hạn dung lượng (vượt thì nén dần theo PDF_LEVELS).
+      async function buildPdf(maxBytes, onLevel) {
         await procChain;
         for (const p of st.pages) if (!p.done) await processAndStore(p);
-        // Ảnh trang nhúng PDF: dùng thẳng file JPEG đã lưu tạm trên máy; cần nén mạnh hơn mới mã hoá lại.
-        const jpg = async p => {
-          const q = p.filter === 'bw' ? Math.min(0.85, qual) : qual;
-          const b = q >= outQ(p) ? await getOutBlob(p) : await toBlob(await getOut(p), q);
-          return new Uint8Array(await b.arrayBuffer());
-        };
         const key = paperKey(), paper = PAPER[key], s = getSession();
-        let doc = null;
-        if (key === 'card') {
-          // CCCD: MỖI MẶT 1 TRANG, trang đúng tỉ lệ thẻ và ảnh phủ kín mép trang. Khổ trang rộng 297mm
-          // (như A4 ngang) để phần mềm đọc PDF (vd quét mã QR CCCD) chuyển trang thành ảnh ở độ phân giải
-          // thường vẫn đủ lớn để đọc được QR; ảnh nhúng vẫn giữ nguyên độ phân giải gốc.
-          const CARD_PAGE_LONG = 297;
-          for (const p of st.pages) {
-            const land = p.outW >= p.outH;
-            const r = Math.min(p.outW, p.outH) / Math.max(p.outW, p.outH);
-            const W = land ? CARD_PAGE_LONG : CARD_PAGE_LONG * r, H = land ? CARD_PAGE_LONG * r : CARD_PAGE_LONG;
-            const orient = land ? 'landscape' : 'portrait';
-            if (!doc) doc = new jsPDF({ unit: 'mm', format: [W, H], orientation: orient, compress: true });
-            else doc.addPage([W, H], orient);
-            doc.addImage(await jpg(p), 'JPEG', 0, 0, W, H, undefined, 'FAST');
+        // Khổ trang (pt): A4/A3 đúng khổ theo chiều ảnh; CCCD mỗi mặt 1 trang đúng tỉ lệ thẻ, cạnh dài 297mm
+        // (như A4 ngang) để phần mềm đọc PDF chuyển trang thành ảnh vẫn đủ lớn đọc được QR.
+        const CARD_PAGE_LONG = 297;
+        const pageSize = p => {
+          if (key === 'card') {
+            const land = p.outW >= p.outH, r = Math.min(p.outW, p.outH) / Math.max(p.outW, p.outH);
+            return land ? [CARD_PAGE_LONG, CARD_PAGE_LONG * r] : [CARD_PAGE_LONG * r, CARD_PAGE_LONG];
           }
-        } else {
-          const fmt = key.toLowerCase();
-          for (const p of st.pages) {
-            const land = p.outW > p.outH, W = land ? paper.h : paper.w, H = land ? paper.w : paper.h;
-            const orient = land ? 'landscape' : 'portrait';
-            if (!doc) doc = new jsPDF({ unit: 'mm', format: fmt, orientation: orient, compress: true });
-            else doc.addPage(fmt, orient);
-            doc.addImage(await jpg(p), 'JPEG', 0, 0, W, H, undefined, 'FAST');
-          }
-        }
+          return p.outW > p.outH ? [paper.h, paper.w] : [paper.w, paper.h];
+        };
+        const longMm = key === 'card' ? 0 : Math.max(paper.w, paper.h); // CCCD: không thu nhỏ (giữ nét mã QR)
         // CCCD: ghi luôn nội dung mã QR đã đọc được vào thuộc tính PDF (Keywords "CCCD_QR:...", Subject) để
         // phần mềm nhập thông tin CCCD lấy được thông tin chủ dù ảnh trong PDF khó quét QR.
         let qrText = '';
@@ -9830,18 +10089,54 @@ Bấm Hủy để chụp lại (nút 📷 trên trang), hoặc OK để vẫn l�
             if (p.qrText) { qrText = p.qrText; break; }
           }
         }
-        doc.setProperties({
-          title: cleanFileName(), author: s ? s.email : '', creator: 'TDMAP Scan',
-          subject: qrText ? 'CCCD_QR:' + qrText : curType().label,
-          keywords: qrText ? 'CCCD_QR:' + qrText : ''
-        });
-        return doc;
+        const info = {
+          Title: cleanFileName(), Author: s ? s.email : '', Creator: 'TDMAP Scan', Producer: 'TDMAP Scan',
+          Subject: qrText ? 'CCCD_QR:' + qrText : curType().label, Keywords: qrText ? 'CCCD_QR:' + qrText : '',
+          CreationDate: pdfDate(new Date())
+        };
+        const OVERHEAD = 600; // byte khung PDF mỗi trang (ước lượng dư)
+        let pdf = null;
+        for (let li = 0; li < PDF_LEVELS.length; li++) {
+          const lv = PDF_LEVELS[li];
+          if (onLevel) onLevel(li, lv);
+          const pages = []; let total = 2000, over = false;
+          for (const p of st.pages) {
+            const j = await pageJpeg(p, lv, longMm), [Wmm, Hmm] = pageSize(p);
+            pages.push(Object.assign(j, { W: Wmm * MM_PT, H: Hmm * MM_PT }));
+            total += j.blob.size + OVERHEAD;
+            if (maxBytes && total > maxBytes && li < PDF_LEVELS.length - 1) { over = true; break; } // vượt -> bỏ, nén mức sau
+          }
+          if (over) continue;
+          pdf = assemblePdf(pages, info);
+          break;
+        }
+        return pdf;
+      }
+      function saveBlobAs(blob, name) {
+        const url = URL.createObjectURL(blob), a = document.createElement('a');
+        a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 60000);
       }
       async function downloadPdf() {
         if (!st.pages.length || !checkSph() || !(await confirmSharp())) return;
         setMsg('⏳ Đang tạo PDF…');
-        try { const doc = await buildPdf(); doc.save(cleanFileName() + '.pdf'); setMsg('✓ Đã tải về máy: <b>' + esc(cleanFileName()) + '.pdf</b>', 'ok'); }
+        try {
+          const pdf = await buildPdf();
+          saveBlobAs(pdf, cleanFileName() + '.pdf');
+          setMsg(`✓ Đã tải về máy: <b>${esc(cleanFileName())}.pdf</b> (${(pdf.size / 1048576).toFixed(1)} MB)`, 'ok');
+        }
         catch (e) { setMsg('⚠ Không tạo được PDF: ' + esc(e.message), 'err'); }
+      }
+      // PDF -> base64 theo từng khúc 3MB (bội số của 3 nên ghép khúc vẫn đúng base64), ghép thành Blob:
+      // không bao giờ có 1 chuỗi base64 khổng lồ trong RAM.
+      async function blobToBase64Blob(blob) {
+        const CH = 3 * 1024 * 1024;
+        let acc = new Blob([], { type: 'text/plain' });
+        for (let o = 0; o < blob.size; o += CH) {
+          const url = await new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = () => rej(r.error || new Error('Không đọc được file PDF')); r.readAsDataURL(blob.slice(o, o + CH)); });
+          acc = new Blob([acc, url.slice(url.indexOf(',') + 1)], { type: 'text/plain' });
+        }
+        return acc;
       }
       // Thửa chưa có link HSQ: dùng (hoặc tạo) thư mục tên tờ-thửa trong thư mục HSQ của xã, ngay lúc lưu.
       async function ensureFolder() {
@@ -9893,22 +10188,22 @@ Bấm Hủy để chụp lại (nút 📷 trên trang), hoặc OK để vẫn l�
       async function uploadCurrent(prog) {
         prog = prog || (() => { });
         prog(0.05, 'Đang tạo file PDF…');
-        // Máy chủ nhận tối đa 40MB/file: file lớn hơn thì nén ảnh JPEG mạnh dần (giữ nguyên số điểm ảnh).
-        const LIMIT_MB = 38;
-        let b64 = '', mb = 0;
-        for (const q of [0.95, 0.85, 0.75, 0.6]) {
-          b64 = (await buildPdf(q)).output('datauristring').split(',')[1];
-          mb = b64.length * 0.75 / 1048576;
-          if (mb <= LIMIT_MB) break;
-          prog(0.1, `File ${mb.toFixed(0)} MB vượt giới hạn ${LIMIT_MB} MB — đang nén lại…`);
-        }
+        // Máy chủ nhận tối đa 40MB/file và Apps Script nhận tối đa ~50MB/lần gửi (base64 to hơn file 4/3)
+        // -> giới hạn 36MB; lớn hơn thì nén dần (chất lượng JPEG rồi độ phân giải, xem PDF_LEVELS).
+        const LIMIT_MB = 36;
+        const pdf = await buildPdf(LIMIT_MB * 1048576, li => {
+          if (li) prog(0.1, `File vượt ${LIMIT_MB} MB — đang nén lại (mức ${li}/${PDF_LEVELS.length - 1})…`);
+        });
+        const mb = pdf.size / 1048576;
         if (mb > LIMIT_MB) throw new Error(`File PDF quá lớn (${mb.toFixed(0)} MB, tối đa ${LIMIT_MB} MB) — tách bớt trang sang loại “Giấy tờ khác” rồi lưu lại.`);
+        prog(0.25, `Đang chuẩn bị gửi ${mb.toFixed(1)} MB…`);
+        const b64 = await blobToBase64Blob(pdf);
         prog(0.3, `Đang gửi ${mb.toFixed(1)} MB lên Drive…`, Math.max(3, mb * 2.5));
         const t = curType();
         const d = await api('uploadScan', {
           folderId: st.folder.id,
           fileName: cleanFileName() + '.pdf',
-          pdfBase64: b64,
+          pdfBase64: b64, // Blob chuỗi base64 -> api() ghép thẳng vào thân request, không tạo chuỗi JSON lớn
           overwrite: $('scOverwrite').checked,
           meta: { parcelId: $('scParcel').value.trim(), loaiHoSo: (KINDS[st.kind] || '') + ' - ' + t.label, khoGiay: PAPER[paperKey()].label, soTrang: st.pages.length }
         });
