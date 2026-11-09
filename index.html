@@ -15,7 +15,7 @@
        GitHub Pages). Đang mở trình Scan hoặc đang lưu hồ sơ thì KHÔNG tự tải lại mà hiện thanh "Cập nhật".
        Đổi phiên bản trước khi đưa lên: chạy  python cap_nhat_phien_ban.py "ghi chú"  (sửa cả APP_VERSION lẫn version.json). -->
   <script>
-    window.APP_VERSION = '2026.11.09.1';
+    window.APP_VERSION = '2026.11.09.2';
     (function () {
       var TRY_KEY = 'tdmap_update_try', hiddenAt = 0;
       // Bản mới đã chạy -> bỏ tham số _v khỏi thanh địa chỉ cho gọn.
@@ -5233,7 +5233,7 @@
       list.forEach(p => {
         computeParcelBBox(p);
         p._idLower = (p.id || '').toLowerCase();
-        p._tenChuLower = (p.tenChu || '').toLowerCase();
+        p._tenChuLower = ownerName(p).toLowerCase();
         if (p._minLat == null) return;
         if (p._minLat < gMinLat) gMinLat = p._minLat;
         if (p._maxLat > gMaxLat) gMaxLat = p._maxLat;
@@ -5349,17 +5349,26 @@
       showStatus(STATUS_COLOR_MODE ? 'Đang tô màu thửa theo trạng thái đăng ký' : 'Đã tắt tô màu theo trạng thái đăng ký');
     }
 
+    // Tên chủ chỉ gồm dấu chấm / gạch / gạch dưới / khoảng trắng ("...", "---", "…", "—", "___") = CHƯA CÓ tên chủ.
+    // Dùng hàm này ở mọi chỗ xét/hiển thị tên chủ (màu ranh, nhãn, popup trạng thái, tìm kiếm); dữ liệu gốc giữ nguyên.
+    function ownerName(p) {
+      if (!p) return '';
+      const raw = p.tenChu != null ? String(p.tenChu) : '';
+      if (p._ownerSrc !== raw) { p._ownerSrc = raw; p._owner = /^[\s.\-_…–—‒―·•*\/\|~]*$/.test(raw) ? '' : raw.trim(); }
+      return p._owner;
+    }
+
     function getParcelColor(p) {
       if (STATUS_COLOR_MODE) return STATUS_COLORS[getStatusKey(p)].color;
       if (p && p.trangThaiDK === 'DDK') return '#ff1493';
-      if (SHOW_OWNER_COLOR && p && p.tenChu && p.tenChu.trim()) return '#00e5ff';
+      if (SHOW_OWNER_COLOR && ownerName(p)) return '#00e5ff';
       return '#ffff00';
     }
     // Bản mờ (dùng khi lọc tìm kiếm, thửa không khớp) - giữ cùng tông màu, chỉ giảm alpha.
     function getParcelDimColor(p) {
       if (STATUS_COLOR_MODE) return STATUS_COLORS[getStatusKey(p)].color + '33';
       if (p && p.trangThaiDK === 'DDK') return '#ff149333';
-      if (SHOW_OWNER_COLOR && p && p.tenChu && p.tenChu.trim()) return '#00e5ff33';
+      if (SHOW_OWNER_COLOR && ownerName(p)) return '#00e5ff33';
       return '#ffff0033';
     }
     // Màu NỀN (fill) theo Loại đất. Viền vẫn theo getParcelColor (hồng/xanh ngọc/vàng),
@@ -5427,7 +5436,7 @@
 
       // Nhãn trên bản đồ: dòng 1 = Tờ-Thửa, dòng 2 = Tên chủ (không kèm trạng thái).
       // Trạng thái đăng ký chỉ hiển thị khi click vào thửa (xem trong popup).
-      const ownerLine = p.tenChu || '';
+      const ownerLine = ownerName(p);
       const lblHtml = ownerLine
         ? `${escapeHtml(p.id)}<span class="lbl-owner">${escapeHtml(ownerLine)}</span>`
         : escapeHtml(p.id);
@@ -5890,14 +5899,14 @@
         : '';
 
       // Hàng 3: Tên chủ - luôn hiển thị nhãn "Tên chủ: ", không ẩn khi trống
-      const ownerLineHtml = `<div class="popup-owner-line">Tên chủ: ${escapeHtml(p.tenChu || '')}</div>`;
+      const ownerLineHtml = `<div class="popup-owner-line">Tên chủ: ${escapeHtml(ownerName(p))}</div>`;
 
       // Hàng 4: Trạng thái đăng ký
       // - Đã đăng ký (DDK)                              -> hồng
       // - Chưa đăng ký nhưng đã có Tên chủ               -> xanh lá
       // - Chưa đăng ký và chưa có Tên chủ                -> đỏ (CDK, như trước)
       const isDdk = p.trangThaiDK === 'DDK';
-      const hasOwner = !!(p.tenChu && p.tenChu.trim());
+      const hasOwner = !!ownerName(p);
       const statusClass = isDdk ? 'ddk' : (hasOwner ? 'owner' : 'cdk');
       const statusText = TRANG_THAI_DK_TEXT[p.trangThaiMa]
         ? `${TRANG_THAI_DK_TEXT[p.trangThaiMa]} (mã ${p.trangThaiMa})`
@@ -6151,7 +6160,7 @@
         return `
       <div class="sg-item" onclick="selectSuggestion(${i})">
         <div class="sg-id">Tờ-Thửa ${escapeHtml(p.id)}</div>
-        ${p.tenChu ? `<div class="sg-name">${escapeHtml(p.tenChu)}</div>` : ''}
+        ${ownerName(p) ? `<div class="sg-name">${escapeHtml(ownerName(p))}</div>` : ''}
         ${sub.length ? `<div class="sg-sub">${escapeHtml(sub.join(' · '))}</div>` : ''}
       </div>`;
       }).join('');
@@ -8199,7 +8208,7 @@
         const p = parcelsById.get(x.key);
         if (!p) return;
         p.tenChu = x.tenChu;
-        p._tenChuLower = (p.tenChu || '').toLowerCase();
+        p._tenChuLower = ownerName(p).toLowerCase();
         refreshParcelVisual(p);
         updated++;
       });
